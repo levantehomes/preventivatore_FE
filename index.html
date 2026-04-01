@@ -319,21 +319,38 @@
      
       saveBookings: async function(bookings) {
         try {
+          // Normalizza i dati per il backend
+          const normalizedBookings = bookings.map(function(b) {
+            return {
+              id: String(b.id || Date.now()),
+              guestName: String(b.guestName || ''),
+              checkIn: b.checkIn || '',
+              checkOut: b.checkOut || '',
+              numAdults: parseInt(b.numAdults) || 0,
+              numChildren: parseInt(b.numChildren) || 0,
+              depositPaid: Boolean(b.depositPaid),
+              notes: String(b.notes || ''),
+              createdAt: b.createdAt || new Date().toISOString()
+            };
+          });
+
           const response = await fetch(BACKEND_CONFIG.apiUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json'
             },
-            body: JSON.stringify(bookings)
+            body: JSON.stringify({ bookings: normalizedBookings })
           });
 
           if (!response.ok) {
-            throw new Error('Errore HTTP: ' + response.status);
+            const errorData = await response.json().catch(function() { return {}; });
+            console.error('Errore backend:', errorData);
+            throw new Error('Errore HTTP: ' + response.status + ' - ' + (errorData.error || ''));
           }
 
           const result = await response.json();
 
-          if (!result.success) {
+          if (result.success === false) {
             throw new Error(result.error || 'Errore salvataggio');
           }
 
