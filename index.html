@@ -140,33 +140,180 @@
     // BACKEND API CONFIGURATION
     // ============================================
     const BACKEND_CONFIG = {
-      apiBaseUrl: 'https://preventivatore-chi.vercel.app/api'
+      // URL del backend deployato su Vercel
+      apiUrl: 'https://preventivatore-chi.vercel.app/api/bookings'
     };
-
+    
+    // ============================================
+    // GLOBAL ERROR HANDLER
+    // ============================================
+    window.onerror = function(msg, url, line, col, error) {
+      console.error('Global Error:', msg, 'at', url, line, col);
+      return true;
+    };
+    
+    function checkLibraries() {
+      const errors = [];
+      if (typeof React === 'undefined') errors.push('React library non caricata');
+      if (typeof ReactDOM === 'undefined') errors.push('ReactDOM library non caricata');
+      if (typeof MaterialUI === 'undefined') errors.push('Material UI library non caricata');
+      
+      if (errors.length > 0) {
+        document.body.innerHTML = '<div style="padding:20px;color:#d32f2f;"><h1> Errore Caricamento Librerie</h1><ul>' + 
+          errors.map(function(e) { return '<li>' + e + '</li>'; }).join('') + 
+          '</ul><p>Verifica la connessione internet e ricarica la pagina.</p></div>';
+        throw new Error('Librerie richieste non caricate');
+      }
+      
+      console.log(' Librerie caricate');
+      return true;
+    }
+    
+    checkLibraries();
+    
+    const {
+      Box, Container, Typography, AppBar, Toolbar, Card, CardContent,
+      Grid, Button, TextField, Paper, Alert, Divider, Chip, Tabs, Tab,
+      IconButton, Dialog, DialogTitle, DialogContent, DialogActions,
+      List, ListItem, ListItemText, ListItemSecondaryAction, CircularProgress,
+      Snackbar
+    } = MaterialUI;
+    
+    // ============================================
+    // CONFIGURATION
+    // ============================================
+    const CONFIG = {
+      monthlyPrices: {
+        1: 30, 2: 30, 3: 30, 4: 30, 5: 30, 6: 30,
+        7: 40, 8: 50, 9: 35, 10: 30, 11: 30, 12: 30
+      },
+      
+      // Supplemento ADULTO extra per mese (PER SOGGIORNO, non a notte!)
+      extraAdultSurchargeByMonth: {
+        1: 20, 2: 20, 3: 20, 4: 20, 5: 20, 6: 20,
+        7: 25, 8: 25, 9: 20, 10: 20, 11: 20, 12: 20
+      },
+      
+      // Supplemento BAMBINO extra (PER SOGGIORNO, fisso)
+      extraChildSurcharge: 10,  // 10€ per soggiorno
+      
+      childAge: 12,  // Bambini: 0-12 anni (non compiuti)
+      
+      operationalMonths: [3, 4, 5, 6, 7, 8, 9, 10, 11],
+      minNights: 3,
+      minPeople: 4,  // Tariffa minima: come se ci fossero 4 adulti
+      
+      discounts: [
+        { minNights: 7, percentage: 10 },
+        { minNights: 5, percentage: 5 }
+      ]
+    };
+    
     // ============================================
     // BACKEND API
     // ============================================
     const GoogleSheetsAPI = {
       isConfigured: function() {
-        return !!BACKEND_CONFIG.apiBaseUrl?.trim();
-      },
-
-      initializeSheet: async function() {
-        if (!this.isConfigured()) {
-          console.warn('Backend API non configurato');
-          return false;
-        }
+        // Il backend è sempre configurato
         return true;
       },
-
-      loadBookings: async function() {
+      
+      initializeSheet: async function() {
+        // Con il backend non serve inizializzazione
+        return true;
+      },
+      
+     /*  loadBookings: async function() {
         if (!this.isConfigured()) {
           return this.loadFromLocalStorage();
         }
-
+        
         try {
-          const response = await fetch(BACKEND_CONFIG.apiBaseUrl + '/bookings', {
-            method: 'GET'
+          const response = await fetch(GOOGLE_APPS_SCRIPT_CONFIG.scriptUrl);
+          
+          if (!response.ok) {
+            throw new Error('Errore HTTP: ' + response.status);
+          }
+          
+          const bookings = await response.json();
+          
+          // Salva anche in LocalStorage come backup
+          this.saveToLocalStorage(bookings);
+          
+          return bookings;
+        } catch (error) {
+          console.error('Errore caricamento da Google Apps Script:', error);
+          console.warn('Uso LocalStorage come fallback');
+          return this.loadFromLocalStorage();
+        }
+      },
+       */
+      loadBookings: async function() {
+        try {
+          const response = await fetch(BACKEND_CONFIG.apiUrl);
+          
+          if (!response.ok) {
+            throw new Error('Errore HTTP: ' + response.status);
+          }
+
+          const bookings = await response.json();
+          
+          // Salva anche in LocalStorage come backup
+          this.saveToLocalStorage(bookings);
+          
+          return bookings;
+        } catch (error) {
+          console.error('Errore caricamento dal backend:', error);
+          console.warn('Uso LocalStorage come fallback');
+          return this.loadFromLocalStorage();
+        }
+      },
+      
+       /* saveBookings: async function(bookings) {
+        if (!this.isConfigured()) {
+          return this.saveToLocalStorage(bookings);
+        }
+        
+        try {
+          const response = await fetch(GOOGLE_APPS_SCRIPT_CONFIG.scriptUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'text/plain'
+            },
+            body: JSON.stringify(bookings)
+          });
+          
+          if (!response.ok) {
+            throw new Error('Errore HTTP: ' + response.status);
+          }
+          
+          const result = await response.json();
+          
+          if (!result.success) {
+            throw new Error(result.error || 'Errore sconosciuto');
+          }
+          
+          // Salva anche in LocalStorage come backup
+          this.saveToLocalStorage(bookings);
+          
+          return true;
+        } catch (error) {
+          console.error('Errore salvataggio su Google Apps Script:', error);
+          // Salva comunque in LocalStorage
+          this.saveToLocalStorage(bookings);
+          throw error;
+        }
+      },
+       */
+     
+      saveBookings: async function(bookings) {
+        try {
+          const response = await fetch(BACKEND_CONFIG.apiUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(bookings)
           });
 
           if (!response.ok) {
@@ -176,90 +323,21 @@
           const result = await response.json();
 
           if (!result.success) {
-            throw new Error(result.error || 'Errore caricamento');
+            throw new Error(result.error || 'Errore salvataggio');
           }
 
-          const bookings = Array.isArray(result.bookings) ? result.bookings : [];
+          // Salva anche in LocalStorage come backup
           this.saveToLocalStorage(bookings);
-          return bookings;
-        } catch (error) {
-          console.error('Errore caricamento dal backend:', error);
-          return this.loadFromLocalStorage();
-        }
-      },
 
-      saveBookings: async function(bookings) {
-        const nextBookings = Array.isArray(bookings) ? bookings : [];
-
-        if (!this.isConfigured()) {
-          this.saveToLocalStorage(nextBookings);
-          return true;
-        }
-
-        const previousBookings = this.loadFromLocalStorage();
-        const previousMap = new Map(previousBookings.map(function(b) { return [String(b.id), b]; }));
-        const nextMap = new Map(nextBookings.map(function(b) { return [String(b.id), b]; }));
-
-        try {
-          const deletedIds = previousBookings
-            .filter(function(b) { return !nextMap.has(String(b.id)); })
-            .map(function(b) { return String(b.id); });
-
-          for (let i = 0; i < deletedIds.length; i++) {
-            const deleteResponse = await fetch(
-              BACKEND_CONFIG.apiBaseUrl + '/bookings?id=' + encodeURIComponent(deletedIds[i]),
-              { method: 'DELETE' }
-            );
-
-            if (!deleteResponse.ok) {
-              throw new Error('Errore HTTP eliminazione: ' + deleteResponse.status);
-            }
-
-            const deleteResult = await deleteResponse.json();
-            if (!deleteResult.success) {
-              throw new Error(deleteResult.error || 'Errore eliminazione');
-            }
-          }
-
-          for (let i = 0; i < nextBookings.length; i++) {
-            const booking = nextBookings[i];
-            const bookingId = String(booking.id);
-            const previousBooking = previousMap.get(bookingId);
-            const isNew = !previousBooking;
-            const hasChanged = isNew || JSON.stringify(previousBooking) !== JSON.stringify(booking);
-
-            if (!hasChanged) {
-              continue;
-            }
-
-            const method = isNew ? 'POST' : 'PUT';
-            const response = await fetch(BACKEND_CONFIG.apiBaseUrl + '/bookings', {
-              method: method,
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify(booking)
-            });
-
-            if (!response.ok) {
-              throw new Error('Errore HTTP salvataggio: ' + response.status);
-            }
-
-            const result = await response.json();
-            if (!result.success) {
-              throw new Error(result.error || 'Errore salvataggio');
-            }
-          }
-
-          this.saveToLocalStorage(nextBookings);
           return true;
         } catch (error) {
           console.error('Errore salvataggio sul backend:', error);
+          // Salva comunque in LocalStorage
+          this.saveToLocalStorage(bookings);
           throw error;
         }
       },
-
-      loadFromLocalStorage: function() {
+       loadFromLocalStorage: function() {
         try {
           const stored = localStorage.getItem('bnb_bookings');
           return stored ? JSON.parse(stored) : [];
@@ -267,7 +345,7 @@
           return [];
         }
       },
-
+      
       saveToLocalStorage: function(bookings) {
         try {
           localStorage.setItem('bnb_bookings', JSON.stringify(bookings));
@@ -276,7 +354,7 @@
         }
       }
     };
-
+    
     // ============================================
     // BUSINESS LOGIC
     // ============================================
@@ -908,13 +986,7 @@
           setBookings(loadedBookings);
           setLoading(false);
           
-          if (!GoogleSheetsAPI.isConfigured()) {
-            setSnackbar({
-              open: true,
-              message: ' Backend non configurato. Usando LocalStorage.',
-              severity: 'warning'
-            });
-          }
+          // Backend sempre configurato, nessun warning necessario
         }
         init();
       }, []);
@@ -1196,16 +1268,10 @@
               sx: { flexGrow: 1 }
             }, 'Generatore Preventivi | Levante Homes'),
             
-            GoogleSheetsAPI.isConfigured() && React.createElement(Chip, {
-              label: 'Backend API',
+            React.createElement(Chip, {
+              label: 'Supabase',
               size: 'small',
               sx: { backgroundColor: '#4caf50', color: 'white' }
-            }),
-            
-            !GoogleSheetsAPI.isConfigured() && React.createElement(Chip, {
-              label: 'LocalStorage',
-              size: 'small',
-              sx: { backgroundColor: '#ff9800', color: 'white' }
             })
           )
         ),
@@ -1542,8 +1608,8 @@
       const root = ReactDOM.createRoot(rootElement);
       root.render(React.createElement(QuoteGenerator));
       
-      console.log(' App rendered');
-      console.log('Backend API:', GoogleSheetsAPI.isConfigured());
+      console.log('✅ App rendered');
+      console.log('Backend API:', BACKEND_CONFIG.apiUrl);
       
     } catch (error) {
       console.error(' Render error:', error);
