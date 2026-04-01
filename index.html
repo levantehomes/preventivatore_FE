@@ -256,7 +256,18 @@
             throw new Error('Errore HTTP: ' + response.status);
           }
 
-          const bookings = await response.json();
+          const data = await response.json();
+          
+          // Il backend potrebbe restituire { bookings: [...] } o direttamente [...]
+          let bookings;
+          if (Array.isArray(data)) {
+            bookings = data;
+          } else if (data && Array.isArray(data.bookings)) {
+            bookings = data.bookings;
+          } else {
+            console.warn('Formato risposta backend non valido:', data);
+            bookings = [];
+          }
           
           // Salva anche in LocalStorage come backup
           this.saveToLocalStorage(bookings);
