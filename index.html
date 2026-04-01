@@ -1,0 +1,1554 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Generatore Preventivi | Levante Homes</title>
+  
+  <!-- React 18 -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- Material UI -->
+  <script crossorigin src="https://unpkg.com/@mui/material@5/umd/material-ui.production.min.js"></script>
+  
+  <!-- Google Fonts & Icons -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+  
+  <!-- Flatpickr Date Picker -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/it.js"></script>
+  
+  <style>
+    body { 
+      margin: 0; 
+      font-family: 'Roboto', sans-serif;
+      background-color: #f5f5f5;
+    }
+    #root { 
+      width: 100%; 
+      min-height: 100vh;
+    }
+    
+    .calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+      margin-top: 10px;
+    }
+    
+    .calendar-day {
+      aspect-ratio: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      position: relative;
+      background: white;
+      transition: all 0.2s;
+    }
+    
+    .calendar-day:hover {
+      background: #f0f0f0;
+      transform: scale(1.05);
+    }
+    
+    .calendar-day.header {
+      background: #2e5e7e;
+      color: white;
+      font-weight: bold;
+      cursor: default;
+    }
+    
+    .calendar-day.header:hover {
+      transform: none;
+    }
+    
+    .calendar-day.other-month {
+      color: #ccc;
+    }
+    
+    .calendar-day.today {
+      border: 2px solid #2e5e7e;
+      font-weight: bold;
+    }
+    
+    .calendar-day.booked {
+      background: #fff9c4;
+      border-color: #fbc02d;
+    }
+    
+    .calendar-day.booked.deposit-paid {
+      background: #c8e6c9;
+      border-color: #4caf50;
+    }
+    
+    .calendar-day.selected-range {
+      background: #e3f2fd;
+      border-color: #2e5e7e;
+    }
+    
+    .booking-indicator {
+      position: absolute;
+      bottom: 2px;
+      right: 2px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    
+    .booking-indicator.pending {
+      background: #fbc02d;
+    }
+    
+    .booking-indicator.confirmed {
+      background: #4caf50;
+    }
+    
+    @media (max-width: 600px) {
+      .calendar-day {
+        font-size: 0.7rem;
+      }
+    }
+    
+    /* Flatpickr customization */
+    .flatpickr-calendar {
+      font-family: 'Roboto', sans-serif;
+    }
+    
+    .flatpickr-day.selected {
+      background: #2e5e7e;
+      border-color: #2e5e7e;
+    }
+    
+    .flatpickr-day.selected:hover {
+      background: #497798;
+      border-color: #497798;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script>
+    // ============================================
+    // BACKEND API CONFIGURATION
+    // ============================================
+    const BACKEND_CONFIG = {
+      apiBaseUrl: 'https://preventivatore-chi.vercel.app/api'
+    };
+
+    // ============================================
+    // BACKEND API
+    // ============================================
+    const GoogleSheetsAPI = {
+      isConfigured: function() {
+        return !!BACKEND_CONFIG.apiBaseUrl?.trim();
+      },
+
+      initializeSheet: async function() {
+        if (!this.isConfigured()) {
+          console.warn('Backend API non configurato');
+          return false;
+        }
+        return true;
+      },
+
+      loadBookings: async function() {
+        if (!this.isConfigured()) {
+          return this.loadFromLocalStorage();
+        }
+
+        try {
+          const response = await fetch(BACKEND_CONFIG.apiBaseUrl + '/bookings', {
+            method: 'GET'
+          });
+
+          if (!response.ok) {
+            throw new Error('Errore HTTP: ' + response.status);
+          }
+
+          const result = await response.json();
+
+          if (!result.success) {
+            throw new Error(result.error || 'Errore caricamento');
+          }
+
+          const bookings = Array.isArray(result.bookings) ? result.bookings : [];
+          this.saveToLocalStorage(bookings);
+          return bookings;
+        } catch (error) {
+          console.error('Errore caricamento dal backend:', error);
+          return this.loadFromLocalStorage();
+        }
+      },
+
+      saveBookings: async function(bookings) {
+        const nextBookings = Array.isArray(bookings) ? bookings : [];
+
+        if (!this.isConfigured()) {
+          this.saveToLocalStorage(nextBookings);
+          return true;
+        }
+
+        const previousBookings = this.loadFromLocalStorage();
+        const previousMap = new Map(previousBookings.map(function(b) { return [String(b.id), b]; }));
+        const nextMap = new Map(nextBookings.map(function(b) { return [String(b.id), b]; }));
+
+        try {
+          const deletedIds = previousBookings
+            .filter(function(b) { return !nextMap.has(String(b.id)); })
+            .map(function(b) { return String(b.id); });
+
+          for (let i = 0; i < deletedIds.length; i++) {
+            const deleteResponse = await fetch(
+              BACKEND_CONFIG.apiBaseUrl + '/bookings?id=' + encodeURIComponent(deletedIds[i]),
+              { method: 'DELETE' }
+            );
+
+            if (!deleteResponse.ok) {
+              throw new Error('Errore HTTP eliminazione: ' + deleteResponse.status);
+            }
+
+            const deleteResult = await deleteResponse.json();
+            if (!deleteResult.success) {
+              throw new Error(deleteResult.error || 'Errore eliminazione');
+            }
+          }
+
+          for (let i = 0; i < nextBookings.length; i++) {
+            const booking = nextBookings[i];
+            const bookingId = String(booking.id);
+            const previousBooking = previousMap.get(bookingId);
+            const isNew = !previousBooking;
+            const hasChanged = isNew || JSON.stringify(previousBooking) !== JSON.stringify(booking);
+
+            if (!hasChanged) {
+              continue;
+            }
+
+            const method = isNew ? 'POST' : 'PUT';
+            const response = await fetch(BACKEND_CONFIG.apiBaseUrl + '/bookings', {
+              method: method,
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(booking)
+            });
+
+            if (!response.ok) {
+              throw new Error('Errore HTTP salvataggio: ' + response.status);
+            }
+
+            const result = await response.json();
+            if (!result.success) {
+              throw new Error(result.error || 'Errore salvataggio');
+            }
+          }
+
+          this.saveToLocalStorage(nextBookings);
+          return true;
+        } catch (error) {
+          console.error('Errore salvataggio sul backend:', error);
+          throw error;
+        }
+      },
+
+      loadFromLocalStorage: function() {
+        try {
+          const stored = localStorage.getItem('bnb_bookings');
+          return stored ? JSON.parse(stored) : [];
+        } catch (e) {
+          return [];
+        }
+      },
+
+      saveToLocalStorage: function(bookings) {
+        try {
+          localStorage.setItem('bnb_bookings', JSON.stringify(bookings));
+        } catch (e) {
+          console.error('Errore LocalStorage:', e);
+        }
+      }
+    };
+
+    // ============================================
+    // BUSINESS LOGIC
+    // ============================================
+    
+    function calculateNights(checkIn, checkOut) {
+      const oneDay = 24 * 60 * 60 * 1000;
+      return Math.round((checkOut - checkIn) / oneDay);
+    }
+    
+    function validateOperationalMonths(checkIn, checkOut) {
+      if (CONFIG.operationalMonths.length === 0) {
+        return { valid: true };
+      }
+      
+      const current = new Date(checkIn);
+      const invalidMonths = [];
+      
+      while (current < checkOut) {
+        const month = current.getMonth() + 1;
+        if (!CONFIG.operationalMonths.includes(month)) {
+          const monthName = new Date(2000, month - 1, 1).toLocaleDateString('it-IT', { month: 'long' });
+          if (!invalidMonths.includes(monthName)) {
+            invalidMonths.push(monthName);
+          }
+        }
+        current.setDate(current.getDate() + 1);
+      }
+      
+      if (invalidMonths.length > 0) {
+        return {
+          valid: false,
+          message: 'Mesi non operativi: ' + invalidMonths.join(', ')
+        };
+      }
+      
+      return { valid: true };
+    }
+    
+    function calculateBasePrice(checkIn, checkOut) {
+      // Prezzo base FISSO: sempre 4 adulti × prezzo/notte × notti
+      let total = 0;
+      const current = new Date(checkIn);
+      
+      while (current < checkOut) {
+        const month = current.getMonth() + 1;
+        const pricePerNight = CONFIG.monthlyPrices[month] || 0;
+        
+        // Prezzo base fisso per 4 adulti
+        total += CONFIG.minPeople * pricePerNight;
+        
+        current.setDate(current.getDate() + 1);
+      }
+      
+      return Math.round(total);
+    }
+    
+    function calculateTotalBeds(numAdults, numChildren) {
+      // Posti letto totali occupati
+      return numAdults + numChildren;
+    }
+    
+    function calculateSupplement(checkIn, checkOut, numAdults, numChildren) {
+      const totalBeds = calculateTotalBeds(numAdults, numChildren);
+      
+      // Supplementi solo se si superano i 4 posti letto
+      if (totalBeds <= CONFIG.minPeople) {
+        return { adults: 0, children: 0, total: 0 };
+      }
+      
+      // Calcola quanti posti letto extra ci sono
+      const extraBeds = totalBeds - CONFIG.minPeople;
+      
+      // Prima copriamo gli adulti extra, poi i bambini
+      const extraAdults = Math.max(0, numAdults - CONFIG.minPeople);
+      const extraChildren = Math.max(0, extraBeds - extraAdults);
+      
+      let adultSupplement = 0;
+      let childSupplement = 0;
+      
+      // Supplemento adulti (PER SOGGIORNO)
+      if (extraAdults > 0) {
+        const current = new Date(checkIn);
+        const months = [];
+        
+        while (current < checkOut) {
+          const month = current.getMonth() + 1;
+          if (!months.includes(month)) {
+            months.push(month);
+          }
+          current.setDate(current.getDate() + 1);
+        }
+        
+        const avgAdultSurcharge = months.reduce(function(sum, month) {
+          return sum + (CONFIG.extraAdultSurchargeByMonth[month] || 20);
+        }, 0) / months.length;
+        
+        adultSupplement = Math.round(extraAdults * avgAdultSurcharge);
+      }
+      
+      // Supplemento bambini (PER SOGGIORNO)
+      if (extraChildren > 0) {
+        childSupplement = extraChildren * CONFIG.extraChildSurcharge;
+      }
+      
+      return {
+        adults: adultSupplement,
+        children: childSupplement,
+        total: adultSupplement + childSupplement
+      };
+    }
+    
+    function findApplicableDiscount(nights) {
+      for (let i = 0; i < CONFIG.discounts.length; i++) {
+        if (nights >= CONFIG.discounts[i].minNights) {
+          return CONFIG.discounts[i];
+        }
+      }
+      return null;
+    }
+    
+    function calculateQuote(checkInDate, checkOutDate, numAdults, numChildren) {
+      const errors = [];
+      
+      if (!checkInDate || !checkOutDate) {
+        errors.push('Inserire date di check-in e check-out');
+      }
+      
+      const checkIn = new Date(checkInDate);
+      const checkOut = new Date(checkOutDate);
+      
+      if (checkOut <= checkIn) {
+        errors.push('Check-out deve essere dopo check-in');
+      }
+      
+      const nights = calculateNights(checkIn, checkOut);
+      
+      if (nights < CONFIG.minNights) {
+        errors.push('Minimo ' + CONFIG.minNights + ' notti (selezionate: ' + nights + ')');
+      }
+      
+      const monthValidation = validateOperationalMonths(checkIn, checkOut);
+      if (!monthValidation.valid) {
+        errors.push(monthValidation.message);
+      }
+      
+      if (!numAdults || numAdults < 1) {
+        errors.push('Inserire almeno 1 adulto');
+      }
+      
+      if (numChildren < 0) {
+        errors.push('Numero bambini non valido');
+      }
+      
+      if (errors.length > 0) {
+        return { success: false, errors: errors };
+      }
+      
+      const totalBeds = calculateTotalBeds(numAdults, numChildren);
+      
+      // Calcola prezzo base FISSO (sempre 4 adulti)
+      const basePrice = calculateBasePrice(checkIn, checkOut);
+      
+      // Calcola supplementi (solo se > 4 posti letto)
+      const supplement = calculateSupplement(checkIn, checkOut, numAdults, numChildren);
+      
+      const subtotal = basePrice + supplement.total;
+      
+      const discount = findApplicableDiscount(nights);
+      let discountAmount = 0;
+      let discountPercentage = 0;
+      
+      if (discount) {
+        discountPercentage = discount.percentage;
+        discountAmount = Math.round(subtotal * (discountPercentage / 100));
+      }
+      
+      const finalTotal = subtotal - discountAmount;
+      
+      const formatDate = function(date) {
+        return date.toLocaleDateString('it-IT', { 
+          day: 'numeric', 
+          month: 'long', 
+          year: 'numeric' 
+        });
+      };
+      
+      return {
+        success: true,
+        data: {
+          period: formatDate(checkIn) + ' - ' + formatDate(checkOut),
+          nights: nights,
+          numAdults: numAdults,
+          numChildren: numChildren,
+          totalBeds: totalBeds,
+          basePrice: basePrice,
+          adultSupplement: supplement.adults,
+          childSupplement: supplement.children,
+          totalSupplement: supplement.total,
+          discountAmount: discountAmount,
+          discountPercentage: discountPercentage,
+          finalTotal: finalTotal
+        }
+      };
+    }
+    
+    // ============================================
+    // DATE UTILITIES
+    // ============================================
+    
+    function formatDateForInput(date) {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return year + '-' + month + '-' + day;
+    }
+    
+    function isSameDay(date1, date2) {
+      return date1.getFullYear() === date2.getFullYear() &&
+             date1.getMonth() === date2.getMonth() &&
+             date1.getDate() === date2.getDate();
+    }
+    
+    function isDateInRange(date, start, end) {
+      if (!start || !end) return false;
+      return date >= start && date <= end;
+    }
+    
+    // ============================================
+    // REACT COMPONENTS
+    // ============================================
+    
+    const MetricCard = function(props) {
+      const { label, value, highlight, info } = props;
+      
+      return React.createElement(Card, {
+        sx: {
+          height: '100%',
+          backgroundColor: highlight ? '#e3f2fd' : '#fff',
+          border: highlight ? '2px solid #2e5e7e' : 'none'
+        }
+      },
+        React.createElement(CardContent, null,
+          React.createElement(Typography, {
+            variant: 'body2',
+            color: 'text.secondary',
+            gutterBottom: true
+          }, label),
+          React.createElement(Typography, {
+            variant: highlight ? 'h4' : 'h5',
+            sx: {
+              mt: 1,
+              fontWeight: highlight ? 700 : 500,
+              color: highlight ? '#2e5e7e' : 'inherit'
+            }
+          }, value),
+          info && React.createElement(Typography, {
+            variant: 'caption',
+            color: 'text.secondary',
+            sx: { mt: 1, display: 'block' }
+          }, info)
+        )
+      );
+    };
+    
+    const CalendarView = function(props) {
+      const { bookings, selectedRange } = props;
+      const [currentMonth, setCurrentMonth] = React.useState(new Date());
+      
+      const year = currentMonth.getFullYear();
+      const month = currentMonth.getMonth();
+      
+      const firstDay = new Date(year, month, 1);
+      const lastDay = new Date(year, month + 1, 0);
+      const startingDayOfWeek = firstDay.getDay();
+      const daysInMonth = lastDay.getDate();
+      
+      const prevMonth = function() {
+        setCurrentMonth(new Date(year, month - 1, 1));
+      };
+      
+      const nextMonth = function() {
+        setCurrentMonth(new Date(year, month + 1, 1));
+      };
+      
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      const days = [];
+      const dayNames = ['Dom', 'Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab'];
+      
+      dayNames.forEach(function(name) {
+        days.push(
+          React.createElement('div', {
+            key: 'header-' + name,
+            className: 'calendar-day header'
+          }, name)
+        );
+      });
+      
+      for (let i = 0; i < startingDayOfWeek; i++) {
+        days.push(
+          React.createElement('div', {
+            key: 'empty-' + i,
+            className: 'calendar-day other-month'
+          })
+        );
+      }
+      
+      for (let day = 1; day <= daysInMonth; day++) {
+        const date = new Date(year, month, day);
+        const dateStr = formatDateForInput(date);
+        
+        const isToday = isSameDay(date, today);
+        const isInSelectedRange = selectedRange && isDateInRange(date, selectedRange.start, selectedRange.end);
+        
+        const booking = bookings.find(function(b) {
+          const checkIn = new Date(b.checkIn);
+          const checkOut = new Date(b.checkOut);
+          checkOut.setDate(checkOut.getDate() - 1);
+          return isDateInRange(date, checkIn, checkOut);
+        });
+        
+        let className = 'calendar-day';
+        if (isToday) className += ' today';
+        if (isInSelectedRange) className += ' selected-range';
+        if (booking) {
+          className += ' booked';
+          if (booking.depositPaid) className += ' deposit-paid';
+        }
+        
+        days.push(
+          React.createElement('div', {
+            key: 'day-' + day,
+            className: className
+          },
+            day,
+            booking && React.createElement('div', {
+              className: 'booking-indicator ' + (booking.depositPaid ? 'confirmed' : 'pending')
+            })
+          )
+        );
+      }
+      
+      const monthName = currentMonth.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' });
+      
+      return React.createElement(Box, null,
+        React.createElement(Box, {
+          sx: {
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            mb: 2
+          }
+        },
+          React.createElement(IconButton, { onClick: prevMonth },
+            React.createElement('span', { className: 'material-icons' }, 'chevron_left')
+          ),
+          React.createElement(Typography, { variant: 'h6', sx: { textTransform: 'capitalize' } }, monthName),
+          React.createElement(IconButton, { onClick: nextMonth },
+            React.createElement('span', { className: 'material-icons' }, 'chevron_right')
+          )
+        ),
+        React.createElement('div', { className: 'calendar-grid' }, days),
+        React.createElement(Box, { sx: { mt: 2, display: 'flex', gap: 2, flexWrap: 'wrap', fontSize: '0.85rem' } },
+          React.createElement(Box, { sx: { display: 'flex', alignItems: 'center', gap: 0.5 } },
+            React.createElement('div', {
+              style: {
+                width: 16,
+                height: 16,
+                background: '#fff9c4',
+                border: '1px solid #fbc02d',
+                borderRadius: 4
+              }
+            }),
+            React.createElement(Typography, { variant: 'caption' }, 'Anticipo da ricevere')
+          ),
+          React.createElement(Box, { sx: { display: 'flex', alignItems: 'center', gap: 0.5 } },
+            React.createElement('div', {
+              style: {
+                width: 16,
+                height: 16,
+                background: '#c8e6c9',
+                border: '1px solid #4caf50',
+                borderRadius: 4
+              }
+            }),
+            React.createElement(Typography, { variant: 'caption' }, 'Anticipo ricevuto')
+          )
+        )
+      );
+    };
+    
+    const BookingDialog = function(props) {
+      const { open, onClose, onSave, initialData } = props;
+      
+      const [guestName, setGuestName] = React.useState(initialData?.guestName || '');
+      const [checkIn, setCheckIn] = React.useState(initialData?.checkIn || '');
+      const [checkOut, setCheckOut] = React.useState(initialData?.checkOut || '');
+      const [numAdults, setNumAdults] = React.useState(initialData?.numAdults || '');
+      const [numChildren, setNumChildren] = React.useState(initialData?.numChildren || 0);
+      const [depositPaid, setDepositPaid] = React.useState(initialData?.depositPaid || false);
+      const [notes, setNotes] = React.useState(initialData?.notes || '');
+      
+      // Initialize Flatpickr for dialog date inputs
+      React.useEffect(function() {
+        if (!open || typeof flatpickr === 'undefined') return;
+        
+        setTimeout(function() {
+          const dialogCheckIn = document.getElementById('dialog-check-in');
+          const dialogCheckOut = document.getElementById('dialog-check-out');
+          
+          if (dialogCheckIn && dialogCheckOut) {
+            const fpDialogCheckIn = flatpickr(dialogCheckIn, {
+              dateFormat: 'd/m/Y',
+              locale: 'it',
+              allowInput: true,
+              defaultDate: checkIn || null,
+              onChange: function(selectedDates) {
+                if (selectedDates.length > 0) {
+                  const year = selectedDates[0].getFullYear();
+                  const month = String(selectedDates[0].getMonth() + 1).padStart(2, '0');
+                  const day = String(selectedDates[0].getDate()).padStart(2, '0');
+                  setCheckIn(year + '-' + month + '-' + day);
+                }
+              }
+            });
+            
+            const fpDialogCheckOut = flatpickr(dialogCheckOut, {
+              dateFormat: 'd/m/Y',
+              locale: 'it',
+              allowInput: true,
+              defaultDate: checkOut || null,
+              onReady: function(selectedDates, dateStr, instance) {
+                if (checkIn) {
+                  const checkInDateObj = new Date(checkIn);
+                  instance.set('minDate', checkInDateObj);
+                }
+              },
+              onOpen: function(selectedDates, dateStr, instance) {
+                if (checkIn) {
+                  const checkInDateObj = new Date(checkIn);
+                  instance.set('minDate', checkInDateObj);
+                  
+                  setTimeout(function() {
+                    const allDays = instance.calendarContainer.querySelectorAll('.flatpickr-day:not(.flatpickr-disabled)');
+                    
+                    allDays.forEach(function(dayElem) {
+                      if (dayElem.dateObj) {
+                        const dayDate = new Date(dayElem.dateObj);
+                        if (dayDate.toDateString() === checkInDateObj.toDateString()) {
+                          dayElem.style.backgroundColor = '#e3f2fd';
+                          dayElem.style.border = '2px solid #2e5e7e';
+                          dayElem.style.fontWeight = 'bold';
+                          dayElem.style.borderRadius = '4px';
+                        }
+                      }
+                    });
+                  }, 50);
+                }
+              },
+              onMonthChange: function(selectedDates, dateStr, instance) {
+                if (checkIn) {
+                  const checkInDateObj = new Date(checkIn);
+                  
+                  setTimeout(function() {
+                    const allDays = instance.calendarContainer.querySelectorAll('.flatpickr-day:not(.flatpickr-disabled)');
+                    
+                    allDays.forEach(function(dayElem) {
+                      if (dayElem.dateObj) {
+                        const dayDate = new Date(dayElem.dateObj);
+                        if (dayDate.toDateString() === checkInDateObj.toDateString()) {
+                          dayElem.style.backgroundColor = '#e3f2fd';
+                          dayElem.style.border = '2px solid #2e5e7e';
+                          dayElem.style.fontWeight = 'bold';
+                          dayElem.style.borderRadius = '4px';
+                        }
+                      }
+                    });
+                  }, 50);
+                }
+              },
+              onChange: function(selectedDates) {
+                if (selectedDates.length > 0) {
+                  const year = selectedDates[0].getFullYear();
+                  const month = String(selectedDates[0].getMonth() + 1).padStart(2, '0');
+                  const day = String(selectedDates[0].getDate()).padStart(2, '0');
+                  setCheckOut(year + '-' + month + '-' + day);
+                }
+              }
+            });
+            
+            return function() {
+              fpDialogCheckIn.destroy();
+              fpDialogCheckOut.destroy();
+            };
+          }
+        }, 100);
+      }, [open]);
+      
+      const handleSave = function() {
+        if (!guestName || !checkIn || !checkOut || !numAdults) {
+          alert('Compila tutti i campi obbligatori');
+          return;
+        }
+        
+        onSave({
+          id: initialData?.id || Date.now(),
+          guestName: guestName,
+          checkIn: checkIn,
+          checkOut: checkOut,
+          numAdults: parseInt(numAdults),
+          numChildren: parseInt(numChildren) || 0,
+          depositPaid: depositPaid,
+          notes: notes || '',
+          createdAt: initialData?.createdAt || new Date().toISOString()
+        });
+        
+        onClose();
+      };
+      
+      return React.createElement(Dialog, {
+        open: open,
+        onClose: onClose,
+        maxWidth: 'sm',
+        fullWidth: true
+      },
+        React.createElement(DialogTitle, null, initialData ? 'Modifica Prenotazione' : 'Nuova Prenotazione'),
+        React.createElement(DialogContent, null,
+          React.createElement(Box, { sx: { display: 'flex', flexDirection: 'column', gap: 2, mt: 1 } },
+            React.createElement(TextField, {
+              fullWidth: true,
+              label: 'Nome Ospite',
+              value: guestName,
+              onChange: function(e) { setGuestName(e.target.value); },
+              required: true
+            }),
+            React.createElement(TextField, {
+              fullWidth: true,
+              label: 'Check-in',
+              type: 'text',
+              value: checkIn ? new Date(checkIn).toLocaleDateString('it-IT') : '',
+              InputLabelProps: { shrink: true },
+              inputProps: { id: 'dialog-check-in', placeholder: 'gg/mm/aaaa' },
+              required: true
+            }),
+            React.createElement(TextField, {
+              fullWidth: true,
+              label: 'Check-out',
+              type: 'text',
+              value: checkOut ? new Date(checkOut).toLocaleDateString('it-IT') : '',
+              InputLabelProps: { shrink: true },
+              inputProps: { id: 'dialog-check-out', placeholder: 'gg/mm/aaaa' },
+              required: true
+            }),
+            React.createElement(TextField, {
+              fullWidth: true,
+              label: 'Numero Adulti',
+              type: 'number',
+              value: numAdults,
+              onChange: function(e) { setNumAdults(e.target.value); },
+              inputProps: { min: 1 },
+              required: true
+            }),
+            React.createElement(TextField, {
+              fullWidth: true,
+              label: 'Numero Bambini (0-12 anni)',
+              type: 'number',
+              value: numChildren,
+              onChange: function(e) { setNumChildren(e.target.value); },
+              inputProps: { min: 0 },
+              helperText: 'Metà prezzo, 1 posto letto'
+            }),
+            React.createElement(Box, { sx: { display: 'flex', alignItems: 'center', gap: 1 } },
+              React.createElement('input', {
+                type: 'checkbox',
+                checked: depositPaid,
+                onChange: function(e) { setDepositPaid(e.target.checked); },
+                id: 'deposit-checkbox'
+              }),
+              React.createElement('label', { htmlFor: 'deposit-checkbox' }, 'Anticipo ricevuto')
+            ),
+            React.createElement(TextField, {
+              fullWidth: true,
+              label: 'Note',
+              multiline: true,
+              rows: 3,
+              value: notes,
+              onChange: function(e) { setNotes(e.target.value); }
+            })
+          )
+        ),
+        React.createElement(DialogActions, null,
+          React.createElement(Button, { onClick: onClose }, 'Annulla'),
+          React.createElement(Button, {
+            onClick: handleSave,
+            variant: 'contained'
+          }, 'Salva')
+        )
+      );
+    };
+    
+    // ============================================
+    // MAIN APP
+    // ============================================
+    
+    const QuoteGenerator = function() {
+      const [activeTab, setActiveTab] = React.useState(0);
+      
+      const [checkInDate, setCheckInDate] = React.useState('');
+      const [checkOutDate, setCheckOutDate] = React.useState('');
+      const [numAdults, setNumAdults] = React.useState('');
+      const [numChildren, setNumChildren] = React.useState(0);
+      const [quoteResult, setQuoteResult] = React.useState(null);
+      const [errors, setErrors] = React.useState([]);
+      
+      const [bookings, setBookings] = React.useState([]);
+      const [bookingDialogOpen, setBookingDialogOpen] = React.useState(false);
+      const [editingBooking, setEditingBooking] = React.useState(null);
+      const [loading, setLoading] = React.useState(true);
+      const [snackbar, setSnackbar] = React.useState({ open: false, message: '', severity: 'info' });
+      
+      const [selectedRange, setSelectedRange] = React.useState(null);
+      
+      React.useEffect(function() {
+        async function init() {
+          setLoading(true);
+          await GoogleSheetsAPI.initializeSheet();
+          const loadedBookings = await GoogleSheetsAPI.loadBookings();
+          setBookings(loadedBookings);
+          setLoading(false);
+          
+          if (!GoogleSheetsAPI.isConfigured()) {
+            setSnackbar({
+              open: true,
+              message: ' Backend non configurato. Usando LocalStorage.',
+              severity: 'warning'
+            });
+          }
+        }
+        init();
+      }, []);
+      
+      React.useEffect(function() {
+        if (checkInDate && checkOutDate) {
+          const start = new Date(checkInDate);
+          const end = new Date(checkOutDate);
+          end.setDate(end.getDate() - 1);
+          setSelectedRange({ start: start, end: end });
+        } else {
+          setSelectedRange(null);
+        }
+      }, [checkInDate, checkOutDate]);
+      
+      // Initialize Flatpickr for date inputs
+      React.useEffect(function() {
+        if (typeof flatpickr === 'undefined') return;
+        
+        const checkInInput = document.getElementById('check-in-input');
+        const checkOutInput = document.getElementById('check-out-input');
+        
+        if (checkInInput && checkOutInput) {
+          const fpCheckIn = flatpickr(checkInInput, {
+            dateFormat: 'd/m/Y',
+            locale: 'it',
+            allowInput: true,
+            onChange: function(selectedDates, dateStr) {
+              if (selectedDates.length > 0) {
+                const year = selectedDates[0].getFullYear();
+                const month = String(selectedDates[0].getMonth() + 1).padStart(2, '0');
+                const day = String(selectedDates[0].getDate()).padStart(2, '0');
+                setCheckInDate(year + '-' + month + '-' + day);
+              }
+            }
+          });
+          
+          const fpCheckOut = flatpickr(checkOutInput, {
+            dateFormat: 'd/m/Y',
+            locale: 'it',
+            allowInput: true,
+            onReady: function(selectedDates, dateStr, instance) {
+              const currentCheckIn = document.getElementById('check-in-input').value;
+              console.log('onReady - Check-in value:', currentCheckIn);
+              if (currentCheckIn) {
+                const parts = currentCheckIn.split('/');
+                if (parts.length === 3) {
+                  const checkInDateObj = new Date(parts[2], parts[1] - 1, parts[0]);
+                  instance.set('minDate', checkInDateObj);
+                }
+              }
+            },
+            onOpen: function(selectedDates, dateStr, instance) {
+              const currentCheckIn = document.getElementById('check-in-input').value;
+              console.log('onOpen - Check-in value:', currentCheckIn);
+              
+              if (currentCheckIn) {
+                const parts = currentCheckIn.split('/');
+                if (parts.length === 3) {
+                  const checkInDateObj = new Date(parts[2], parts[1] - 1, parts[0]);
+                  instance.set('minDate', checkInDateObj);
+                  
+                  console.log('Highlighting check-in date:', checkInDateObj.toDateString());
+                  
+                  setTimeout(function() {
+                    const allDays = instance.calendarContainer.querySelectorAll('.flatpickr-day:not(.flatpickr-disabled)');
+                    console.log('Found days:', allDays.length);
+                    
+                    allDays.forEach(function(dayElem) {
+                      if (dayElem.dateObj) {
+                        const dayDate = new Date(dayElem.dateObj);
+                        if (dayDate.toDateString() === checkInDateObj.toDateString()) {
+                          console.log('Found matching day! Highlighting...');
+                          dayElem.style.backgroundColor = '#e3f2fd';
+                          dayElem.style.border = '2px solid #2e5e7e';
+                          dayElem.style.fontWeight = 'bold';
+                          dayElem.style.borderRadius = '4px';
+                        }
+                      }
+                    });
+                  }, 50);
+                }
+              }
+            },
+            onMonthChange: function(selectedDates, dateStr, instance) {
+              const currentCheckIn = document.getElementById('check-in-input').value;
+              
+              if (currentCheckIn) {
+                const parts = currentCheckIn.split('/');
+                if (parts.length === 3) {
+                  const checkInDateObj = new Date(parts[2], parts[1] - 1, parts[0]);
+                  
+                  setTimeout(function() {
+                    const allDays = instance.calendarContainer.querySelectorAll('.flatpickr-day:not(.flatpickr-disabled)');
+                    
+                    allDays.forEach(function(dayElem) {
+                      if (dayElem.dateObj) {
+                        const dayDate = new Date(dayElem.dateObj);
+                        if (dayDate.toDateString() === checkInDateObj.toDateString()) {
+                          dayElem.style.backgroundColor = '#e3f2fd';
+                          dayElem.style.border = '2px solid #2e5e7e';
+                          dayElem.style.fontWeight = 'bold';
+                          dayElem.style.borderRadius = '4px';
+                        }
+                      }
+                    });
+                  }, 50);
+                }
+              }
+            },
+            onChange: function(selectedDates, dateStr) {
+              if (selectedDates.length > 0) {
+                const year = selectedDates[0].getFullYear();
+                const month = String(selectedDates[0].getMonth() + 1).padStart(2, '0');
+                const day = String(selectedDates[0].getDate()).padStart(2, '0');
+                setCheckOutDate(year + '-' + month + '-' + day);
+              }
+            }
+          });
+          
+          return function() {
+            fpCheckIn.destroy();
+            fpCheckOut.destroy();
+          };
+        }
+      }, [activeTab]);
+      
+      const handleCalculate = function() {
+        const result = calculateQuote(checkInDate, checkOutDate, parseInt(numAdults), parseInt(numChildren) || 0);
+        
+        if (result.success) {
+          setQuoteResult(result.data);
+          setErrors([]);
+        } else {
+          setQuoteResult(null);
+          setErrors(result.errors);
+        }
+      };
+      
+      const handleReset = function() {
+        setCheckInDate('');
+        setCheckOutDate('');
+        setNumAdults('');
+        setNumChildren(0);
+        setQuoteResult(null);
+        setErrors([]);
+      };
+      
+      const handleSaveBooking = async function(booking) {
+        setLoading(true);
+        
+        try {
+          let updatedBookings;
+          
+          if (editingBooking) {
+            updatedBookings = bookings.map(function(b) {
+              return b.id === booking.id ? booking : b;
+            });
+          } else {
+            updatedBookings = bookings.concat([booking]);
+          }
+          
+          await GoogleSheetsAPI.saveBookings(updatedBookings);
+          setBookings(updatedBookings);
+          setEditingBooking(null);
+          
+          setSnackbar({
+            open: true,
+            message: ' Prenotazione salvata!',
+            severity: 'success'
+          });
+        } catch (error) {
+          setSnackbar({
+            open: true,
+            message: ' Errore: ' + error.message,
+            severity: 'error'
+          });
+        } finally {
+          setLoading(false);
+        }
+      };
+      
+      const handleDeleteBooking = async function(id) {
+        if (!confirm('Eliminare questa prenotazione?')) return;
+        
+        setLoading(true);
+        
+        try {
+          const updatedBookings = bookings.filter(function(b) { return b.id !== id; });
+          await GoogleSheetsAPI.saveBookings(updatedBookings);
+          setBookings(updatedBookings);
+          
+          setSnackbar({
+            open: true,
+            message: ' Prenotazione eliminata',
+            severity: 'success'
+          });
+        } catch (error) {
+          setSnackbar({
+            open: true,
+            message: ' Errore: ' + error.message,
+            severity: 'error'
+          });
+        } finally {
+          setLoading(false);
+        }
+      };
+      
+      const handleToggleDeposit = async function(id) {
+        setLoading(true);
+        
+        try {
+          const updatedBookings = bookings.map(function(b) {
+            if (b.id === id) {
+              return Object.assign({}, b, { depositPaid: !b.depositPaid });
+            }
+            return b;
+          });
+          
+          await GoogleSheetsAPI.saveBookings(updatedBookings);
+          setBookings(updatedBookings);
+          
+          setSnackbar({
+            open: true,
+            message: ' Stato anticipo aggiornato',
+            severity: 'success'
+          });
+        } catch (error) {
+          setSnackbar({
+            open: true,
+            message: ' Errore: ' + error.message,
+            severity: 'error'
+          });
+        } finally {
+          setLoading(false);
+        }
+      };
+      
+      const handleEditBooking = function(booking) {
+        setEditingBooking(booking);
+        setBookingDialogOpen(true);
+      };
+      
+      const handleNewBooking = function() {
+        setEditingBooking(null);
+        setBookingDialogOpen(true);
+      };
+      
+      const handleRefreshBookings = async function() {
+  setLoading(true);
+  try {
+    const loadedBookings = await GoogleSheetsAPI.loadBookings();
+
+    if (Array.isArray(loadedBookings) && loadedBookings.length >= 0) {
+      setBookings(loadedBookings);
+    }
+
+    setSnackbar({
+      open: true,
+      message: 'Prenotazioni aggiornate',
+      severity: 'success'
+    });
+  } catch (error) {
+    setSnackbar({
+      open: true,
+      message: 'Errore aggiornamento: ' + error.message,
+      severity: 'error'
+    });
+  } finally {
+    setLoading(false);
+  }
+};
+      return React.createElement(Box, { sx: { minHeight: '100vh', backgroundColor: '#f5f5f5' } },
+        React.createElement(AppBar, { position: 'static', sx: { backgroundColor: '#2e5e7e' } },
+          React.createElement(Toolbar, null,
+            React.createElement(Typography, {
+              variant: 'h6',
+              component: 'div',
+              sx: { flexGrow: 1 }
+            }, 'Generatore Preventivi | Levante Homes'),
+            
+            GoogleSheetsAPI.isConfigured() && React.createElement(Chip, {
+              label: 'Backend API',
+              size: 'small',
+              sx: { backgroundColor: '#4caf50', color: 'white' }
+            }),
+            
+            !GoogleSheetsAPI.isConfigured() && React.createElement(Chip, {
+              label: 'LocalStorage',
+              size: 'small',
+              sx: { backgroundColor: '#ff9800', color: 'white' }
+            })
+          )
+        ),
+        
+        React.createElement(Container, { maxWidth: 'lg', sx: { mt: 4, mb: 4 } },
+          React.createElement(Paper, { sx: { mb: 3 } },
+            React.createElement(Tabs, {
+              value: activeTab,
+              onChange: function(e, newValue) { setActiveTab(newValue); },
+              variant: 'fullWidth'
+            },
+              React.createElement(Tab, { label: 'Preventivatore' }),
+              React.createElement(Tab, { label: 'Calendario Prenotazioni' })
+            )
+          ),
+          
+          activeTab === 0 && React.createElement(Box, null,
+            React.createElement(Typography, {
+              variant: 'h4',
+              gutterBottom: true,
+              sx: { mb: 3 }
+            }, 'Preventivatore'),
+            
+            React.createElement(Paper, { sx: { p: 3, mb: 3 } },
+              React.createElement(Typography, {
+                variant: 'h6',
+                gutterBottom: true,
+                sx: { mb: 3 }
+              }, 'Generazione Preventivo'),
+              
+              React.createElement(Grid, { container: true, spacing: 3 },
+                React.createElement(Grid, { item: true, xs: 12, sm: 6, md: 3 },
+                  React.createElement(TextField, {
+                    fullWidth: true,
+                    label: 'Check-in',
+                    type: 'text',
+                    value: checkInDate ? new Date(checkInDate).toLocaleDateString('it-IT') : '',
+                    InputLabelProps: { shrink: true },
+                    inputProps: { id: 'check-in-input', placeholder: 'gg/mm/aaaa' },
+                    required: true,
+                    onClick: function(e) { e.target.focus(); }
+                  })
+                ),
+                
+                React.createElement(Grid, { item: true, xs: 12, sm: 6, md: 3 },
+                  React.createElement(TextField, {
+                    fullWidth: true,
+                    label: 'Check-out',
+                    type: 'text',
+                    value: checkOutDate ? new Date(checkOutDate).toLocaleDateString('it-IT') : '',
+                    InputLabelProps: { shrink: true },
+                    inputProps: { id: 'check-out-input', placeholder: 'gg/mm/aaaa' },
+                    required: true,
+                    onClick: function(e) { e.target.focus(); }
+                  })
+                ),
+                
+                React.createElement(Grid, { item: true, xs: 12, sm: 6, md: 3 },
+                  React.createElement(TextField, {
+                    fullWidth: true,
+                    label: 'Adulti',
+                    type: 'number',
+                    value: numAdults,
+                    onChange: function(e) { setNumAdults(e.target.value); },
+                    inputProps: { min: 1 },
+                    required: true
+                  })
+                ),
+                
+                React.createElement(Grid, { item: true, xs: 12, sm: 6, md: 3 },
+                  React.createElement(TextField, {
+                    fullWidth: true,
+                    label: 'Bambini (0-12 anni)',
+                    type: 'number',
+                    value: numChildren,
+                    onChange: function(e) { setNumChildren(e.target.value); },
+                    inputProps: { min: 0 },
+                    helperText: 'Metà prezzo, 1 posto letto'
+                  })
+                ),
+                
+                React.createElement(Grid, { item: true, xs: 12 },
+                  React.createElement(Box, { sx: { display: 'flex', gap: 2 } },
+                    React.createElement(Button, {
+                      variant: 'contained',
+                      size: 'large',
+                      onClick: handleCalculate,
+                      sx: { minWidth: 200 }
+                    }, 'Calcola Preventivo'),
+                    
+                    React.createElement(Button, {
+                      variant: 'outlined',
+                      size: 'large',
+                      onClick: handleReset
+                    }, 'Reset')
+                  )
+                )
+              )
+            ),
+            
+            errors.length > 0 && React.createElement(Box, { sx: { mb: 3 } },
+              errors.map(function(error, index) {
+                return React.createElement(Alert, {
+                  key: index,
+                  severity: 'error',
+                  sx: { mb: 1 }
+                }, error);
+              })
+            ),
+            
+            quoteResult && React.createElement(Paper, { sx: { p: 3 } },
+              React.createElement(Box, { sx: { display: 'flex', alignItems: 'center', mb: 3 } },
+                React.createElement(Typography, {
+                  variant: 'h6',
+                  sx: { flexGrow: 1 }
+                }, 'Riepilogo Preventivo'),
+                
+                React.createElement(Chip, {
+                  label: 'Preventivo Calcolato',
+                  color: 'success',
+                  size: 'small'
+                })
+              ),
+              
+              React.createElement(Grid, { container: true, spacing: 2 },
+                React.createElement(Grid, { item: true, xs: 12, sm: 6, md: 4 },
+                  React.createElement(MetricCard, {
+                    label: 'Periodo',
+                    value: quoteResult.period
+                  })
+                ),
+                
+                React.createElement(Grid, { item: true, xs: 12, sm: 6, md: 4 },
+                  React.createElement(MetricCard, {
+                    label: 'Notti',
+                    value: quoteResult.nights
+                  })
+                ),
+                
+                React.createElement(Grid, { item: true, xs: 12, sm: 6, md: 4 },
+                  React.createElement(MetricCard, {
+                    label: 'Ospiti',
+                    value: quoteResult.numAdults + ' adulti' + (quoteResult.numChildren > 0 ? ', ' + quoteResult.numChildren + ' bambini' : ''),
+                    info: quoteResult.totalBeds + ' posti letto occupati'
+                  })
+                ),
+                
+                React.createElement(Grid, { item: true, xs: 12, sm: 6, md: 4 },
+                  React.createElement(MetricCard, {
+                    label: 'Prezzo Base',
+                    value: quoteResult.basePrice + '€',
+                    info: 'Tariffa fissa per 4 adulti'
+                  })
+                ),
+                
+                quoteResult.totalSupplement > 0 && React.createElement(Grid, { item: true, xs: 12, sm: 6, md: 4 },
+                  React.createElement(MetricCard, {
+                    label: 'Supplementi',
+                    value: quoteResult.totalSupplement + '€',
+                    info: (quoteResult.adultSupplement > 0 ? 'Adulti: ' + quoteResult.adultSupplement + '€' : '') + 
+                          (quoteResult.childSupplement > 0 ? (quoteResult.adultSupplement > 0 ? ', ' : '') + 'Bambini: ' + quoteResult.childSupplement + '€' : '')
+                  })
+                ),
+                
+                React.createElement(Grid, { item: true, xs: 12, sm: 6, md: 4 },
+                  React.createElement(MetricCard, {
+                    label: 'Sconto',
+                    value: quoteResult.discountAmount > 0 
+                      ? '-' + quoteResult.discountAmount + '€ (' + quoteResult.discountPercentage + '%)'
+                      : '0€'
+                  })
+                ),
+                
+                React.createElement(Grid, { item: true, xs: 12 },
+                  React.createElement(MetricCard, {
+                    label: 'TOTALE FINALE',
+                    value: quoteResult.finalTotal + '€',
+                    highlight: true
+                  })
+                )
+              ),
+              
+              React.createElement(Divider, { sx: { my: 3 } }),
+              
+              React.createElement(Typography, {
+                variant: 'caption',
+                color: 'text.secondary',
+                component: 'div'
+              },
+                'Configurazione: Min ' + CONFIG.minNights + ' notti | Tariffa base fissa: ' + CONFIG.minPeople + ' adulti | Bambini 0-' + CONFIG.childAge + ' anni (1 posto letto) | Supplemento adulto extra: 20-25€/soggiorno | Supplemento bambino extra: ' + CONFIG.extraChildSurcharge + '€/soggiorno'
+              )
+            )
+          ),
+          
+          activeTab === 1 && React.createElement(Box, null,
+            React.createElement(Box, { sx: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, flexWrap: 'wrap', gap: 2 } },
+              React.createElement(Typography, { variant: 'h4' }, 'Calendario Prenotazioni'),
+              React.createElement(Box, { sx: { display: 'flex', gap: 1 } },
+                React.createElement(Button, {
+                  variant: 'outlined',
+                  onClick: handleRefreshBookings,
+                  disabled: loading,
+                  startIcon: React.createElement('span', { className: 'material-icons' }, 'refresh')
+                }, 'Aggiorna'),
+                React.createElement(Button, {
+                  variant: 'contained',
+                  onClick: handleNewBooking,
+                  startIcon: React.createElement('span', { className: 'material-icons' }, 'add')
+                }, 'Nuova')
+              )
+            ),
+            
+            loading && React.createElement(Box, { sx: { display: 'flex', justifyContent: 'center', py: 4 } },
+              React.createElement(CircularProgress, null)
+            ),
+            
+            !loading && React.createElement(Grid, { container: true, spacing: 3 },
+              React.createElement(Grid, { item: true, xs: 12, md: 7 },
+                React.createElement(Paper, { sx: { p: 3 } },
+                  React.createElement(CalendarView, {
+                    bookings: bookings,
+                    selectedRange: selectedRange
+                  })
+                )
+              ),
+              
+              React.createElement(Grid, { item: true, xs: 12, md: 5 },
+                React.createElement(Paper, { sx: { p: 3 } },
+                  React.createElement(Typography, { variant: 'h6', gutterBottom: true }, 'Prenotazioni'),
+                  
+                  bookings.length === 0 && React.createElement(Typography, {
+                    variant: 'body2',
+                    color: 'text.secondary',
+                    sx: { textAlign: 'center', py: 4 }
+                  }, 'Nessuna prenotazione'),
+                  
+                  bookings.length > 0 && React.createElement(List, null,
+                    bookings.sort(function(a, b) {
+                      return new Date(a.checkIn) - new Date(b.checkIn);
+                    }).map(function(booking) {
+                      const checkIn = new Date(booking.checkIn).toLocaleDateString('it-IT', { 
+                        day: 'numeric', 
+                        month: 'short' 
+                      });
+                      const checkOut = new Date(booking.checkOut).toLocaleDateString('it-IT', { 
+                        day: 'numeric', 
+                        month: 'short' 
+                      });
+                      const totalPeople = booking.numAdults + booking.numChildren;
+                      const peopleText = booking.numAdults + 'A' + (booking.numChildren > 0 ? ' + ' + booking.numChildren + 'B' : '');
+                      
+                      return React.createElement(ListItem, {
+                        key: booking.id,
+                        sx: {
+                          border: '1px solid #ddd',
+                          borderRadius: 1,
+                          mb: 1,
+                          backgroundColor: booking.depositPaid ? '#c8e6c9' : '#fff9c4'
+                        }
+                      },
+                        React.createElement(ListItemText, {
+                          primary: booking.guestName,
+                          secondary: checkIn + ' - ' + checkOut + ' (' + peopleText + ')'
+                        }),
+                        React.createElement(ListItemSecondaryAction, null,
+                          React.createElement(IconButton, {
+                            size: 'small',
+                            onClick: function() { handleToggleDeposit(booking.id); },
+                            title: booking.depositPaid ? 'Segna anticipo non ricevuto' : 'Segna anticipo ricevuto',
+                            disabled: loading
+                          },
+                            React.createElement('span', {
+                              className: 'material-icons',
+                              style: { color: booking.depositPaid ? '#4caf50' : '#fbc02d' }
+                            }, booking.depositPaid ? 'check_circle' : 'pending')
+                          ),
+                          React.createElement(IconButton, {
+                            size: 'small',
+                            onClick: function() { handleEditBooking(booking); },
+                            disabled: loading
+                          },
+                            React.createElement('span', { className: 'material-icons' }, 'edit')
+                          ),
+                          React.createElement(IconButton, {
+                            size: 'small',
+                            onClick: function() { handleDeleteBooking(booking.id); },
+                            disabled: loading
+                          },
+                            React.createElement('span', { className: 'material-icons' }, 'delete')
+                          )
+                        )
+                      );
+                    })
+                  )
+                )
+              )
+            )
+          )
+        ),
+        
+        React.createElement(BookingDialog, {
+          open: bookingDialogOpen,
+          onClose: function() { setBookingDialogOpen(false); setEditingBooking(null); },
+          onSave: handleSaveBooking,
+          initialData: editingBooking
+        }),
+        
+        React.createElement(Snackbar, {
+          open: snackbar.open,
+          autoHideDuration: 6000,
+          onClose: function() { setSnackbar({ open: false, message: '', severity: 'info' }); },
+          anchorOrigin: { vertical: 'bottom', horizontal: 'center' }
+        },
+          React.createElement(Alert, {
+            onClose: function() { setSnackbar({ open: false, message: '', severity: 'info' }); },
+            severity: snackbar.severity,
+            sx: { width: '100%' }
+          }, snackbar.message)
+        )
+      );
+    };
+    
+    // ============================================
+    // RENDER
+    // ============================================
+    
+    try {
+      const rootElement = document.getElementById('root');
+      
+      if (!rootElement) {
+        throw new Error('Root element not found');
+      }
+      
+      const root = ReactDOM.createRoot(rootElement);
+      root.render(React.createElement(QuoteGenerator));
+      
+      console.log(' App rendered');
+      console.log('Backend API:', GoogleSheetsAPI.isConfigured());
+      
+    } catch (error) {
+      console.error(' Render error:', error);
+      alert('Errore: ' + error.message);
+    }
+  </script>
+</body>
+</html>
