@@ -210,6 +210,45 @@
     };
     
     // ============================================
+    // DATE CONVERSION UTILITIES
+    // ============================================
+    
+    /**
+     * Converte una data dal formato YYYY-MM-DD o gg/mm/aaaa al formato ISO YYYY-MM-DD
+     * @param {string} dateStr - Data in formato YYYY-MM-DD o gg/mm/aaaa
+     * @returns {string} Data in formato YYYY-MM-DD
+     */
+    function convertDateToISO(dateStr) {
+      if (!dateStr) return '';
+      
+      // Se è già in formato YYYY-MM-DD, restituiscila così com'è
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        return dateStr;
+      }
+      
+      // Se è in formato gg/mm/aaaa, convertila
+      if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(dateStr)) {
+        const parts = dateStr.split('/');
+        const day = parts[0].padStart(2, '0');
+        const month = parts[1].padStart(2, '0');
+        const year = parts[2];
+        return year + '-' + month + '-' + day;
+      }
+      
+      // Altrimenti prova a parsare come Date object
+      const date = new Date(dateStr);
+      if (!isNaN(date.getTime())) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return year + '-' + month + '-' + day;
+      }
+      
+      console.error('Formato data non riconosciuto:', dateStr);
+      return dateStr;
+    }
+    
+    // ============================================
     // BACKEND API
     // ============================================
     const GoogleSheetsAPI = {
@@ -317,51 +356,159 @@
       },
        */
      
-      saveBookings: async function(bookings) {
+      createBooking: async function(booking) {
         try {
-          // Normalizza i dati per il backend
-          const normalizedBookings = bookings.map(function(b) {
-            return {
-              id: String(b.id || Date.now()),
-              guestName: String(b.guestName || ''),
-              checkIn: b.checkIn || '',
-              checkOut: b.checkOut || '',
-              numAdults: parseInt(b.numAdults) || 0,
-              numChildren: parseInt(b.numChildren) || 0,
-              depositPaid: Boolean(b.depositPaid),
-              notes: String(b.notes || ''),
-              createdAt: b.createdAt || new Date().toISOString()
-            };
-          });
-
+          // Normalizza la prenotazione
+          const checkInISO = convertDateToISO(booking.checkIn);
+          const checkOutISO = convertDateToISO(booking.checkOut);
+          
+          const normalizedBooking = {
+            id: String(booking.id || Date.now()),
+            guestName: String(booking.guestName || '').trim(),
+            checkIn: checkInISO,
+            checkOut: checkOutISO,
+            numAdults: parseInt(booking.numAdults) || 0,
+            numChildren: parseInt(booking.numChildren) || 0,
+            depositPaid: Boolean(booking.depositPaid),
+            notes: String(booking.notes || '').trim(),
+            createdAt: booking.createdAt || new Date().toISOString()
+          };
+          
+          console.log('📤 Creazione nuova prenotazione:', normalizedBooking);
+          
           const response = await fetch(BACKEND_CONFIG.apiUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ bookings: normalizedBookings })
+            body: JSON.stringify(normalizedBooking)
           });
-
+          
+          console.log('📥 Response status:', response.status);
+          
           if (!response.ok) {
-            const errorData = await response.json().catch(function() { return {}; });
-            console.error('Errore backend:', errorData);
-            throw new Error('Errore HTTP: ' + response.status + ' - ' + (errorData.error || ''));
+            const errorText = await response.text();
+            console.error('📥 Errore:', errorText);
+            
+            let errorData;
+            try {
+              errorData = JSON.parse(errorText);
+            } catch (e) {
+              errorData = { error: errorText };
+            }
+            
+            throw new Error('Errore HTTP ' + response.status + ': ' + (errorData.error || errorText));
           }
-
+          
           const result = await response.json();
-
+          console.log('📥 Prenotazione creata:', result);
+          
           if (result.success === false) {
-            throw new Error(result.error || 'Errore salvataggio');
+            throw new Error(result.error || 'Errore creazione prenotazione');
           }
-
-          // Salva anche in LocalStorage come backup
-          this.saveToLocalStorage(bookings);
-
+          
+          return result.booking;
+        } catch (error) {
+          console.error('❌ Errore creazione prenotazione:', error);
+          throw error;
+        }
+      },
+      
+      updateBooking: async function(booking) {
+        try {
+          // Normalizza la prenotazione
+          const checkInISO = convertDateToISO(booking.checkIn);
+          const checkOutISO = convertDateToISO(booking.checkOut);
+          
+          const normalizedBooking = {
+            id: String(booking.id),
+            guestName: String(booking.guestName || '').trim(),
+            checkIn: checkInISO,
+            checkOut: checkOutISO,
+            numAdults: parseInt(booking.numAdults) || 0,
+            numChildren: parseInt(booking.numChildren) || 0,
+            depositPaid: Boolean(booking.depositPaid),
+            notes: String(booking.notes || '').trim(),
+            createdAt: booking.createdAt || new Date().toISOString()
+          };
+          
+          console.log('📤 Aggiornamento prenotazione:', normalizedBooking);
+          
+          const response = await fetch(BACKEND_CONFIG.apiUrl, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(normalizedBooking)
+          });
+          
+          console.log('📥 Response status:', response.status);
+          
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('📥 Errore:', errorText);
+            
+            let errorData;
+            try {
+              errorData = JSON.parse(errorText);
+            } catch (e) {
+              errorData = { error: errorText };
+            }
+            
+            throw new Error('Errore HTTP ' + response.status + ': ' + (errorData.error || errorText));
+          }
+          
+          const result = await response.json();
+          console.log('📥 Prenotazione aggiornata:', result);
+          
+          if (result.success === false) {
+            throw new Error(result.error || 'Errore aggiornamento prenotazione');
+          }
+          
+          return result.booking;
+        } catch (error) {
+          console.error('❌ Errore aggiornamento prenotazione:', error);
+          throw error;
+        }
+      },
+      
+      deleteBooking: async function(id) {
+        try {
+          console.log('📤 Eliminazione prenotazione:', id);
+          
+          const response = await fetch(BACKEND_CONFIG.apiUrl + '?id=' + encodeURIComponent(id), {
+            method: 'DELETE',
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          });
+          
+          console.log('📥 Response status:', response.status);
+          
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('📥 Errore:', errorText);
+            
+            let errorData;
+            try {
+              errorData = JSON.parse(errorText);
+            } catch (e) {
+              errorData = { error: errorText };
+            }
+            
+            throw new Error('Errore HTTP ' + response.status + ': ' + (errorData.error || errorText));
+          }
+          
+          const result = await response.json();
+          console.log('📥 Prenotazione eliminata:', result);
+          
+          if (result.success === false) {
+            throw new Error(result.error || 'Errore eliminazione prenotazione');
+          }
+          
           return true;
         } catch (error) {
-          console.error('Errore salvataggio sul backend:', error);
-          // Salva comunque in LocalStorage
-          this.saveToLocalStorage(bookings);
+          console.error('❌ Errore eliminazione prenotazione:', error);
           throw error;
         }
       },
@@ -1167,18 +1314,24 @@
         setLoading(true);
         
         try {
+          let savedBooking;
           let updatedBookings;
           
           if (editingBooking) {
+            // Aggiorna prenotazione esistente
+            savedBooking = await GoogleSheetsAPI.updateBooking(booking);
             updatedBookings = bookings.map(function(b) {
-              return b.id === booking.id ? booking : b;
+              return b.id === booking.id ? savedBooking : b;
             });
           } else {
-            updatedBookings = bookings.concat([booking]);
+            // Crea nuova prenotazione
+            savedBooking = await GoogleSheetsAPI.createBooking(booking);
+            updatedBookings = bookings.concat([savedBooking]);
           }
           
-          await GoogleSheetsAPI.saveBookings(updatedBookings);
           setBookings(updatedBookings);
+          // Salva anche in LocalStorage come backup
+          GoogleSheetsAPI.saveToLocalStorage(updatedBookings);
           setEditingBooking(null);
           
           setSnackbar({
@@ -1203,9 +1356,11 @@
         setLoading(true);
         
         try {
+          await GoogleSheetsAPI.deleteBooking(id);
           const updatedBookings = bookings.filter(function(b) { return b.id !== id; });
-          await GoogleSheetsAPI.saveBookings(updatedBookings);
           setBookings(updatedBookings);
+          // Salva anche in LocalStorage come backup
+          GoogleSheetsAPI.saveToLocalStorage(updatedBookings);
           
           setSnackbar({
             open: true,
@@ -1227,15 +1382,21 @@
         setLoading(true);
         
         try {
+          const bookingToUpdate = bookings.find(function(b) { return b.id === id; });
+          if (!bookingToUpdate) {
+            throw new Error('Prenotazione non trovata');
+          }
+          
+          const updatedBooking = Object.assign({}, bookingToUpdate, { depositPaid: !bookingToUpdate.depositPaid });
+          const savedBooking = await GoogleSheetsAPI.updateBooking(updatedBooking);
+          
           const updatedBookings = bookings.map(function(b) {
-            if (b.id === id) {
-              return Object.assign({}, b, { depositPaid: !b.depositPaid });
-            }
-            return b;
+            return b.id === id ? savedBooking : b;
           });
           
-          await GoogleSheetsAPI.saveBookings(updatedBookings);
           setBookings(updatedBookings);
+          // Salva anche in LocalStorage come backup
+          GoogleSheetsAPI.saveToLocalStorage(updatedBookings);
           
           setSnackbar({
             open: true,
