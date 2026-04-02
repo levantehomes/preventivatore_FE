@@ -933,20 +933,48 @@
       const [depositPaid, setDepositPaid] = React.useState(initialData?.depositPaid || false);
       const [notes, setNotes] = React.useState(initialData?.notes || '');
       
-      // Initialize Flatpickr for dialog date inputs
+      // Ref per mantenere le istanze Flatpickr senza ricrearle continuamente
+      const fpCheckInRef = React.useRef(null);
+      const fpCheckOutRef = React.useRef(null);
+      
+      // Funzione helper per evidenziare la data di check-in
+      const highlightCheckInDate = React.useCallback(function(instance, checkInDateStr) {
+        if (!checkInDateStr || !instance || !instance.calendarContainer) return;
+        
+        setTimeout(function() {
+          const checkInDateObj = new Date(checkInDateStr);
+          const allDays = instance.calendarContainer.querySelectorAll('.flatpickr-day:not(.flatpickr-disabled)');
+          
+          allDays.forEach(function(dayElem) {
+            if (dayElem.dateObj) {
+              const dayDate = new Date(dayElem.dateObj);
+              if (dayDate.toDateString() === checkInDateObj.toDateString()) {
+                dayElem.style.backgroundColor = '#e3f2fd';
+                dayElem.style.border = '2px solid #2e5e7e';
+                dayElem.style.fontWeight = 'bold';
+                dayElem.style.borderRadius = '4px';
+              }
+            }
+          });
+        }, 50);
+      }, []);
+      
+      // Inizializza Flatpickr solo quando si apre il dialog
       React.useEffect(function() {
         if (!open || typeof flatpickr === 'undefined') return;
         
-        setTimeout(function() {
+        const timer = setTimeout(function() {
           const dialogCheckIn = document.getElementById('dialog-check-in');
           const dialogCheckOut = document.getElementById('dialog-check-out');
           
-          if (dialogCheckIn && dialogCheckOut) {
-            const fpDialogCheckIn = flatpickr(dialogCheckIn, {
+          if (dialogCheckIn && dialogCheckOut && !fpCheckInRef.current && !fpCheckOutRef.current) {
+            // Inizializza Check-in
+            fpCheckInRef.current = flatpickr(dialogCheckIn, {
               dateFormat: 'd/m/Y',
               locale: 'it',
-              allowInput: true,
-              defaultDate: checkIn || null,
+              allowInput: false,
+              clickOpens: true,
+              defaultDate: checkIn ? new Date(checkIn) : null,
               onChange: function(selectedDates) {
                 if (selectedDates.length > 0) {
                   const year = selectedDates[0].getFullYear();
@@ -957,58 +985,27 @@
               }
             });
             
-            const fpDialogCheckOut = flatpickr(dialogCheckOut, {
+            // Inizializza Check-out
+            fpCheckOutRef.current = flatpickr(dialogCheckOut, {
               dateFormat: 'd/m/Y',
               locale: 'it',
-              allowInput: true,
-              defaultDate: checkOut || null,
+              allowInput: false,
+              clickOpens: true,
+              defaultDate: checkOut ? new Date(checkOut) : null,
+              minDate: checkIn ? new Date(checkIn) : null,
               onReady: function(selectedDates, dateStr, instance) {
                 if (checkIn) {
-                  const checkInDateObj = new Date(checkIn);
-                  instance.set('minDate', checkInDateObj);
+                  highlightCheckInDate(instance, checkIn);
                 }
               },
               onOpen: function(selectedDates, dateStr, instance) {
                 if (checkIn) {
-                  const checkInDateObj = new Date(checkIn);
-                  instance.set('minDate', checkInDateObj);
-                  
-                  setTimeout(function() {
-                    const allDays = instance.calendarContainer.querySelectorAll('.flatpickr-day:not(.flatpickr-disabled)');
-                    
-                    allDays.forEach(function(dayElem) {
-                      if (dayElem.dateObj) {
-                        const dayDate = new Date(dayElem.dateObj);
-                        if (dayDate.toDateString() === checkInDateObj.toDateString()) {
-                          dayElem.style.backgroundColor = '#e3f2fd';
-                          dayElem.style.border = '2px solid #2e5e7e';
-                          dayElem.style.fontWeight = 'bold';
-                          dayElem.style.borderRadius = '4px';
-                        }
-                      }
-                    });
-                  }, 50);
+                  highlightCheckInDate(instance, checkIn);
                 }
               },
               onMonthChange: function(selectedDates, dateStr, instance) {
                 if (checkIn) {
-                  const checkInDateObj = new Date(checkIn);
-                  
-                  setTimeout(function() {
-                    const allDays = instance.calendarContainer.querySelectorAll('.flatpickr-day:not(.flatpickr-disabled)');
-                    
-                    allDays.forEach(function(dayElem) {
-                      if (dayElem.dateObj) {
-                        const dayDate = new Date(dayElem.dateObj);
-                        if (dayDate.toDateString() === checkInDateObj.toDateString()) {
-                          dayElem.style.backgroundColor = '#e3f2fd';
-                          dayElem.style.border = '2px solid #2e5e7e';
-                          dayElem.style.fontWeight = 'bold';
-                          dayElem.style.borderRadius = '4px';
-                        }
-                      }
-                    });
-                  }, 50);
+                  highlightCheckInDate(instance, checkIn);
                 }
               },
               onChange: function(selectedDates) {
@@ -1020,14 +1017,30 @@
                 }
               }
             });
-            
-            return function() {
-              fpDialogCheckIn.destroy();
-              fpDialogCheckOut.destroy();
-            };
           }
-        }, 100);
+        }, 150);
+        
+        return function() {
+          clearTimeout(timer);
+          if (fpCheckInRef.current) {
+            fpCheckInRef.current.destroy();
+            fpCheckInRef.current = null;
+          }
+          if (fpCheckOutRef.current) {
+            fpCheckOutRef.current.destroy();
+            fpCheckOutRef.current = null;
+          }
+        };
       }, [open]);
+      
+      // Aggiorna il calendario check-out quando cambia check-in
+      React.useEffect(function() {
+        if (fpCheckOutRef.current && checkIn) {
+          const checkInDate = new Date(checkIn);
+          fpCheckOutRef.current.set('minDate', checkInDate);
+          highlightCheckInDate(fpCheckOutRef.current, checkIn);
+        }
+      }, [checkIn, highlightCheckInDate]);
       
       const handleSave = function() {
         if (!guestName || !checkIn || !checkOut || !numAdults) {
@@ -1072,8 +1085,18 @@
               type: 'text',
               value: checkIn ? new Date(checkIn).toLocaleDateString('it-IT') : '',
               InputLabelProps: { shrink: true },
-              inputProps: { id: 'dialog-check-in', placeholder: 'gg/mm/aaaa' },
-              required: true
+              inputProps: { 
+                id: 'dialog-check-in', 
+                placeholder: 'gg/mm/aaaa',
+                readOnly: true,
+                style: { cursor: 'pointer' }
+              },
+              required: true,
+              onClick: function() {
+                if (fpCheckInRef.current) {
+                  fpCheckInRef.current.open();
+                }
+              }
             }),
             React.createElement(TextField, {
               fullWidth: true,
@@ -1081,8 +1104,18 @@
               type: 'text',
               value: checkOut ? new Date(checkOut).toLocaleDateString('it-IT') : '',
               InputLabelProps: { shrink: true },
-              inputProps: { id: 'dialog-check-out', placeholder: 'gg/mm/aaaa' },
-              required: true
+              inputProps: { 
+                id: 'dialog-check-out', 
+                placeholder: 'gg/mm/aaaa',
+                readOnly: true,
+                style: { cursor: 'pointer' }
+              },
+              required: true,
+              onClick: function() {
+                if (fpCheckOutRef.current) {
+                  fpCheckOutRef.current.open();
+                }
+              }
             }),
             React.createElement(TextField, {
               fullWidth: true,
